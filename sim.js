@@ -181,6 +181,12 @@
       this.remaining = 100;
       this.resetAcceleration();
       this.resetTable(B);
+      this.phase = "set";
+      this.events = [];
+    }
+
+    emit(type, details = {}) {
+      this.events.push({ type, ...details });
     }
 
     resetAcceleration() {
@@ -196,7 +202,10 @@
       this.tableNet = 0;
     }
 
-    atSpin(regular = false) {
+    *atSpin(phase) {
+      this.phase = phase;
+      yield;
+      if (phase === "set") this.remaining--;
       const [flag, payout] = spin(this.rng, this.mode);
       const net = netPayout(flag, payout);
       const result = this.result;
@@ -204,7 +213,8 @@
       result.net += net;
       result.reached2000 ||= result.net >= 2000;
       this.zoneNet += net;
-      if (regular) {
+      this.spinResult = { flag, payout, net, mode: phase };
+      if (phase === "set") {
         increment(result.setGames, this.mode);
         increment(result.setNet, this.mode, net);
       }
@@ -215,6 +225,7 @@
     checkEnding() {
       if (this.zoneNet > 2200 && !this.ending) {
         this.ending = true;
+        this.emit("ending");
         increment(this.result.endingStocks, this.stocks.count);
       }
     }
@@ -223,27 +234,39 @@
       let count = stockAwards[flag] ? this.rng.weighted([2, 3, 4, 5], stockAwards[flag]) : 1;
       if (frozen) {
         this.stocks.strong += count;
+        this.emit("stock", { weak: 0, strong: count });
         return;
       }
       if (cz && count >= 3 && this.rng.random() >= .25) {
-        this.pool.add(this.rng, this.p.strongStockRate, count - 2);
+        this.addPool(count - 2);
         count = 2;
       }
+      const strong = this.stocks.strong;
       this.stocks.add(this.rng, this.p.strongStockRate, count);
+      const addedStrong = this.stocks.strong - strong;
+      this.emit("stock", { weak: count - addedStrong, strong: addedStrong });
+    }
+
+    addPool(count = 1) {
+      this.pool.add(this.rng, this.p.strongStockRate, count);
+      this.emit("pool", { count });
     }
 
     freeze() {
+      this.emit("freeze", { addedGames: this.p.freezeExtension });
+      this.emit("stock", { weak: 1, strong: 0 });
       this.result.freezes++;
       this.remaining += this.p.freezeExtension;
       this.stocks.weak++;
     }
 
-    playSpecialZone(frozen) {
+    *playSpecialZone(frozen) {
+      this.emit("special", { frozen });
       this.result.specials++;
       const rewards = this.result.specialRewards[frozen ? "freeze" : "normal"];
       increment(rewards, "entries");
       while (!this.ending) {
-        const [flag, payout] = this.atSpin();
+        const [flag, payout] = yield* this.atSpin("special");
         if (this.ending) return false;
         if (flag === FREEZE) return true;
         if (!(czHit(flag) || (flag === BELL && payout === 15))) return false;
@@ -251,6 +274,7 @@
         if (rate && this.rng.random() < rate) {
           const games = this.rng.weighted([10, 20, 30, 50, 100, 300], [7500, 2000, 450, 40, 9, 1]);
           this.remaining += games;
+          this.emit("addedGames", { games });
           increment(rewards, "gameAwards");
           increment(rewards, "addedGames", games);
         } else {
@@ -264,30 +288,31 @@
       return false;
     }
 
-    special(frozen = false) {
-      while (this.playSpecialZone(frozen)) {
+    *special(frozen = false) {
+      while (yield* this.playSpecialZone(frozen)) {
         this.freeze();
         frozen = true;
       }
     }
 
-    playCz(fromTable = false) {
+    *playCz(fromTable = false) {
+      this.emit("cz", { fromTable });
       this.result.cz++;
       if (fromTable) this.result.tableCz++;
       for (let game = 0; game < 3 && !this.ending; game++) {
-        const [flag] = this.atSpin();
+        const [flag] = yield* this.atSpin("cz");
         if (this.ending) break;
         if (flag === FREEZE) {
           this.freeze();
-          this.special(true);
+          yield* this.special(true);
         } else if (czHit(flag)) {
           this.award(flag, false, true);
           if (game === 2 && (this.p.czSpecialRate === 1 || this.rng.random() < this.p.czSpecialRate)) {
             this.result.czSpecials++;
-            this.special();
+            yield* this.special();
           }
         } else if (this.rng.random() < this.p.returnStockRate) {
-          this.pool.add(this.rng, this.p.strongStockRate);
+          this.addPool();
         }
       }
     }
@@ -301,24 +326,24 @@
       this.tableNet += counted;
     }
 
-    resolveRarePreludes(finalGame) {
+    *resolveRarePreludes(finalGame) {
       while (this.rarePreludes.length && !this.ending) {
         const prelude = this.rarePreludes[0];
         if (prelude.delay && !finalGame) break;
         this.rarePreludes.shift();
-        if (prelude.outcome === "cz") this.playCz();
+        if (prelude.outcome === "cz") yield* this.playCz();
         if (prelude.outcome === "acceleration") {
           this.accelerationRemaining = 10;
           this.accelerationMultiplier++;
+          this.emit("acceleration", { multiplier: this.accelerationMultiplier });
           this.result.accelerationActivations++;
           this.result.maxAccelerationMultiplier = Math.max(this.result.maxAccelerationMultiplier, this.accelerationMultiplier);
         }
       }
     }
 
-    playSetGame() {
-      this.remaining--;
-      const [flag, payout] = this.atSpin(true);
+    *playSetGame() {
+      const [flag, payout] = yield* this.atSpin("set");
       if (this.ending) return;
       const prelude = this.rarePreludes[0];
       this.countTableNet(netPayout(flag, payout), Boolean(prelude));
@@ -340,50 +365,58 @@
       }
       if (flag === FREEZE) {
         this.freeze();
-        this.special(true);
+        yield* this.special(true);
       }
-      if (rareHit && !this.ending) this.playCz();
-      this.resolveRarePreludes(this.remaining === 0);
-      if (tableHit && !this.ending) this.playCz(true);
+      if (rareHit && !this.ending) yield* this.playCz();
+      yield* this.resolveRarePreludes(this.remaining === 0);
+      if (tableHit && !this.ending) yield* this.playCz(true);
     }
 
-    gapSpin() {
+    *gapSpin(phase) {
+      this.phase = phase;
+      yield;
       this.result.games++;
       this.result.gapGames++;
       const [flag, payout] = spin(this.rng, 0);
       const net = netPayout(flag, payout);
       this.result.gapNet += net;
+      this.spinResult = { flag, payout, net, mode: phase };
       return [flag, net];
     }
 
-    cutZone() {
+    *cutZone(phase) {
+      this.emit("cut");
       this.result.cuts++;
-      this.gapSpin();
+      yield* this.gapSpin(phase);
       this.zoneNet = 0;
       this.initialZoneEligibleFor2000 = false;
       this.resetAcceleration();
     }
 
-    startNewZoneAfterCut() {
-      this.cutZone();
+    *startNewZoneAfterCut(phase) {
+      yield* this.cutZone(phase);
       this.ending = this.cutAfterSet = false;
       this.mode = 3;
       this.remaining = setGames;
       this.stocks = new Stocks(this.p.restartStocks);
       this.pool = new Stocks();
       this.resetTable(this.rng.below(3));
+      this.emit("restart");
     }
 
-    playReturnWindow() {
+    *playReturnWindow() {
+      this.emit("returnWindow");
       this.resetAcceleration();
       if (this.rng.random() < this.p.returnStockRate) {
-        this.pool.add(this.rng, this.p.strongStockRate);
+        this.addPool();
       }
       for (let game = 0; game < 32; game++) {
-        const [flag, net] = this.gapSpin();
+        const [flag, net] = yield* this.gapSpin("return");
         this.zoneNet += net;
-        if (this.zoneNet >= 2400) this.cutZone();
+        if (flag === FREEZE) this.emit("freeze", { addedGames: 100 });
+        if (this.zoneNet >= 2400) yield* this.cutZone("return");
         if (flag === FREEZE) {
+          this.emit("directEntry");
           this.result.gapDirectEntries++;
           this.stocks.weak += this.pool.weak;
           this.stocks.strong += this.pool.strong + 1;
@@ -395,6 +428,7 @@
         }
       }
       if (!this.pool.count) return false;
+      this.emit("return");
       this.result.returns++;
       this.stocks = this.pool;
       this.pool = new Stocks();
@@ -408,39 +442,100 @@
       this.cutAfterSet = afterSet && !this.stocks.strong && this.stocks.weak >= 1
         && this.stocks.weak <= 3 && (meets2000Condition || this.zoneNet > 1000);
       this.mode = this.stocks.take();
+      this.emit("stockSet", { rate: this.mode });
       if (this.cutAfterSet) this.result.cutStockActivations++;
     }
 
-    run(maxSets) {
+    *run(maxSets) {
       while (this.result.sets !== maxSets) {
         this.result.sets++;
         this.checkEnding();
-        while (this.remaining && !this.ending) this.playSetGame();
+        while (this.remaining && !this.ending) yield* this.playSetGame();
         if (this.ending) {
-          while (this.zoneNet < 2400) this.atSpin();
-          this.startNewZoneAfterCut();
+          while (this.zoneNet < 2400) yield* this.atSpin("ending");
+          yield* this.startNewZoneAfterCut("ending");
         } else if (this.cutAfterSet) {
           this.result.cutStockCuts++;
-          this.startNewZoneAfterCut();
+          yield* this.startNewZoneAfterCut("return");
         } else if (this.stocks.count) {
           if (this.result.sets === maxSets) break;
           this.startStockSet(true);
-        } else if (!this.playReturnWindow()) {
-          return this.result;
+        } else if (!(yield* this.playReturnWindow())) {
+          return;
         }
       }
       this.result.setLimited = true;
-      return this.result;
     }
+  }
+
+  const roles = ["押し順ベル", "チェリー", "中段チェリー", "スイカ", "チャンス目", "リプレイ", "ハズレ"];
+  const tableNames = ["A", "B", "天国"];
+
+  function validateMaxSets(maxSets) {
+    if (maxSets !== null && (!Number.isSafeInteger(maxSets) || maxSets < 1)) {
+      throw new RangeError("maxSets must be a positive integer");
+    }
+  }
+
+  function createSession(seedValue = seed, { startNet = null, maxSets = null, parameters = {} } = {}) {
+    validateMaxSets(maxSets);
+    const rng = new Random(seedValue);
+    const at = new AT(new Random(rng.trialSeed()), startNet, { ...baseline, ...parameters });
+    const games = at.run(maxSets);
+    // Stop immediately before each spin. Resolve its rewards and transitions
+    // before returning, then stop before the next random spin.
+    let done = games.next().done;
+    let frozen = false;
+
+    return {
+      get state() {
+        return {
+          mode: frozen ? "freeze" : done ? "end" : at.phase,
+          nextMode: done ? "end" : at.phase,
+          done,
+          game: at.result.games,
+          remaining: at.remaining,
+          rate: at.mode,
+          counter: at.tableNet,
+          threshold: at.threshold,
+          stocks: { weak: at.stocks.weak, strong: at.stocks.strong },
+          pool: at.pool.count,
+          net: at.result.net,
+          zoneNet: at.zoneNet,
+          table: tableNames[at.table],
+          acceleration: {
+            enabled: at.p.accelerationEnabled,
+            multiplier: at.accelerationMultiplier,
+            remaining: at.accelerationRemaining,
+            inPrelude: at.rarePreludes.length > 0,
+          },
+        };
+      },
+      get result() {
+        return done ? structuredClone(at.result) : null;
+      },
+      step() {
+        if (done) return null;
+        at.events = [];
+        done = games.next().done;
+        const { flag, ...spin } = at.spinResult;
+        const events = at.events;
+        frozen = events.some(event => event.type === "freeze");
+        if (done) events.push({ type: "end" });
+        return { game: at.result.games, role: roles[flag], ...spin, events };
+      },
+    };
   }
 
   function* simulateTrials({ trials = 10000, seed: seedValue = seed, startNet = null, maxSets = null, parameters = {} } = {}) {
     if (!Number.isSafeInteger(trials) || trials < 1) throw new RangeError("trials must be a positive integer");
-    if (maxSets !== null && (!Number.isSafeInteger(maxSets) || maxSets < 1)) throw new RangeError("maxSets must be a positive integer");
+    validateMaxSets(maxSets);
     const p = { ...baseline, ...parameters };
     const rng = new Random(seedValue);
     for (let i = 0; i < trials; i++) {
-      yield new AT(new Random(rng.trialSeed()), startNet, p).run(maxSets);
+      const at = new AT(new Random(rng.trialSeed()), startNet, p);
+      for (const _ of at.run(maxSets)) at.events.length = 0;
+      yield at.result;
     }
   }
 
@@ -467,12 +562,67 @@
     };
   }
 
-  const api = { simulate, simulateTrials, summarize };
+  const api = { createSession, simulate, simulateTrials, summarize };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
     if (require.main === module) {
       const assert = require("node:assert/strict");
-      const results = simulate();
+      const { createHash } = require("node:crypto");
+      // SHA-256 of complete result arrays captured from the pre-stepper sim.js.
+      const cases = [
+        [{ trials: 10000 }, "e3211095c92ad4a3bb5ecf84deeaf04368794808944954f9f07d47ea8fbce4b0"],
+        [{
+          trials: 256, seed: -18446744073709551617n, startNet: -1200,
+          parameters: { accelerationEnabled: true, czSpecialRate: .38, rareCzMultiplier: .6, returnStockRate: .12 },
+        }, "2309fad989a92f9b31b90bbc16c2333f7acfbe9183e010074879994cd8f16a2d"],
+        [{
+          trials: 256, seed: 10, startNet: 999, maxSets: 4,
+          parameters: { specialAddedGamesRate: 0, strongStockRate: .25 },
+        }, "42d456e022c9368849048374f25044f74e518b839b61c220ce7b76c17ab464b6"],
+        [{ trials: 256, seed: 0, startNet: 2399, maxSets: 1 }, "7c058d9af29161030dd04b5247aed2fe0579ba2f07c71af09497211125ff0c52"],
+      ];
+      const modes = new Set();
+      const events = new Set();
+
+      function verifySteps(options, expected) {
+        const session = createSession(options.seed, options);
+        assert.equal(session.state.game, 0);
+        assert.equal(session.result, null);
+        for (let game = 1; game <= expected.games; game++) {
+          const before = session.state;
+          const step = session.step();
+          assert.equal(step.game, game);
+          assert.equal(step.mode, before.nextMode);
+          const after = session.state;
+          assert.equal(after.game, game);
+          modes.add(after.mode);
+          for (const event of step.events) events.add(event.type);
+          if (after.mode === "freeze") assert.ok(step.events.some(event => event.type === "freeze"));
+        }
+        assert.equal(session.state.mode, "end");
+        assert.equal(session.step(), null);
+        assert.deepEqual(session.result, expected);
+      }
+
+      const [results] = cases.map(([options, legacyHash]) => {
+        const batch = simulate(options);
+        assert.equal(createHash("sha256").update(JSON.stringify(batch)).digest("hex"), legacyHash);
+        verifySteps(options, batch[0]);
+        return batch;
+      });
+
+      for (let trialSeed = 0; trialSeed < 128; trialSeed++) {
+        const options = { seed: trialSeed, trials: 1, parameters: { accelerationEnabled: true } };
+        verifySteps(options, simulate(options)[0]);
+      }
+      for (const mode of ["set", "cz", "special", "freeze", "return", "ending", "end"]) {
+        assert.ok(modes.has(mode), mode);
+      }
+      for (const event of ["freeze", "cz", "special", "acceleration", "cut", "return", "directEntry"]) {
+        assert.ok(events.has(event), event);
+      }
+      console.log("ステップとバッチの全結果フィールドが132試行で一致しました。");
+      console.log("改修前のバッチと全結果フィールドが10,768試行で一致しました。");
       const summary = summarize(results);
       const reference = { meanNet: 2572.9, medianNet: 768.5, endingRate: .2364, meanSets: 12.31 };
       const meanRelativeError = (summary.meanNet - reference.meanNet) / reference.meanNet;

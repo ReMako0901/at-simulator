@@ -1,254 +1,226 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ATシミュレーター</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      font-family: system-ui, sans-serif;
-      background: #111820;
-      color: #eff6fc;
-      --panel: #1a2632;
-      --border: #3c5264;
-      --muted: #aebfd0;
-      --accent: #69e6bb;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; }
-    main { max-width: 70rem; margin: auto; padding: clamp(1rem, 4vw, 3rem); }
-    h1 { font-size: clamp(1.65rem, 5vw, 2.8rem); margin: 0 0 1.4rem; }
-    h2 { font-size: 1.15rem; margin: 0 0 1rem; }
-    section, form {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 1rem;
-      padding: clamp(1rem, 3vw, 1.5rem);
-      margin-bottom: 1rem;
-    }
-    .fields, dl {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
-      gap: 1rem;
-    }
-    label, dt, #status { color: var(--muted); }
-    label { display: grid; gap: .35rem; align-content: start; }
-    input, select, button { font: inherit; }
-    input:not([type="checkbox"]), select {
-      width: 100%;
-      min-width: 0;
-      padding: .65rem;
-      border: 1px solid var(--border);
-      border-radius: .45rem;
-      background: #111820;
-      color: inherit;
-    }
-    input:disabled { opacity: .5; }
-    .toggle, .actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
-    .toggle input { accent-color: var(--accent); width: 1.1rem; height: 1.1rem; }
-    .actions { margin-top: 1.2rem; }
-    button {
-      background: var(--accent);
-      color: #10241c;
-      border: 0;
-      border-radius: .5rem;
-      padding: .65rem 1.4rem;
-      font-weight: 750;
-      cursor: pointer;
-    }
-    button:disabled { opacity: .5; cursor: wait; }
-    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-    dl { margin: 0; }
-    dl div { padding: .7rem 0; border-top: 1px solid var(--border); }
-    dt { font-size: .85rem; }
-    dd { margin: .25rem 0 0; font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-    canvas { display: block; width: 100%; height: 16rem; }
-  </style>
-  <script src="./sim.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b101a">
+<title>ATシミュレーター</title>
+<style>
+  :root {
+    color-scheme: dark;
+    font-family: system-ui, sans-serif;
+    color: #f4f5ff;
+    background: #0b101a;
+    --muted: #aebbd0;
+    --line: #303d52;
+    --gold: #ffce76;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: radial-gradient(ellipse at top, #1f2b45, transparent 600px); }
+  main { width: min(100%, 760px); margin: auto; padding: 24px 12px 40px; }
+  header { margin: 0 4px 14px; }
+  h1 { margin: 0; font-size: clamp(1.35rem, 5vw, 2rem); letter-spacing: .07em; }
+  h2 { margin: 0; font-size: 1rem; }
+  .machine { padding: clamp(6px, 2vw, 14px); border: 1px solid #485772; border-radius: 20px;
+    background: linear-gradient(160deg, #202c42, #101725 60%); box-shadow: 0 18px 45px #0007; }
+  .lcd { position: relative; isolation: isolate; display: flex; flex-direction: column;
+    justify-content: space-between; aspect-ratio: 16 / 9; overflow: hidden;
+    border: 1px solid #6d809c; border-radius: 13px; padding: clamp(8px, 2vw, 18px);
+    background: #132742 url("img/normal.jpg") center / cover; }
+  .lcd::before { content: ""; position: absolute; z-index: -1; inset: 0; pointer-events: none;
+    background: linear-gradient(#030812e8, #03081228 42%, transparent 55%, #030812e8); }
+  .lcd[data-mode="cz"] { background-image: url("img/cz.jpg"); }
+  .lcd[data-mode="special"] { background-image: url("img/tokka.jpg"); }
+  .lcd[data-mode="freeze"] { background-image: url("img/freeze.jpg"); }
+  .lcd[data-mode="ending"] { background-image: url("img/ending.jpg"); }
+  .lcd[data-mode="end"] { background-image: url("img/end.jpg"); }
+  .hud { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
+  .hud > :nth-child(2) { text-align: center; }
+  .hud > :last-child { text-align: right; }
+  .label, .detail { display: block; color: #d6e1f2; font-size: clamp(.75rem, 2.8vw, .95rem); }
+  .number { font-size: clamp(1rem, 4.6vw, 2.15rem); font-weight: 800; font-variant-numeric: tabular-nums; }
+  #net { color: var(--gold); }
+  .unit { font-size: clamp(.7rem, 2.6vw, .9rem); }
+  .lcd-bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px; }
+  #mode { text-align: right; color: #fff4dc; font-weight: 800; font-size: clamp(.95rem, 4vw, 1.65rem);
+    text-shadow: 0 2px 8px #000; }
+  .outcome { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin: 10px 0; padding: 8px 10px; min-height: 54px; border: 1px solid var(--line);
+    border-radius: 11px; background: #0b111b; font-variant-numeric: tabular-nums; }
+  #role { padding: 4px 9px; border-radius: 6px; background: #253147; color: #fff; font-weight: 750; }
+  #role[data-role="押し順ベル"], #role[data-role="チャンス目"] { background: #ffce76; color: #251909; }
+  #role[data-role="チェリー"] { background: #992c4c; }
+  #role[data-role="スイカ"] { background: #205d43; }
+  #role[data-role="リプレイ"], #role[data-role="中段チェリー"] { background: #245581; }
+  .payout { color: var(--muted); font-size: .86rem; text-align: right; }
+  #payout { color: #f4f5ff; font-size: 1.05rem; font-weight: 700; }
+  .controls { display: grid; grid-template-columns: 1.46fr 1fr .88fr; gap: 7px; align-items: center; }
+  button, input { font: inherit; border-radius: 9px; }
+  button { cursor: pointer; padding: 5px; color: #f4f5ff; border: 1px solid #536987;
+    background: #26354b; font-weight: 750; line-height: 1.25; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  button:active:enabled { transform: translateY(1px); }
+  button:disabled { opacity: .48; cursor: default; }
+  #one { min-height: 72px; background: linear-gradient(#ffdf9e, #f1ac49);
+    color: #241606; border-color: #ffdc96; font-size: 1.15rem; box-shadow: inset 0 -4px #ad65284d; }
+  #ten { min-height: 60px; font-size: .95rem; }
+  #until { min-height: 50px; font-size: .8rem; }
+  .session { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-top: 16px; }
+  .session label { display: grid; gap: 5px; color: var(--muted); font-size: .88rem; }
+  input { width: 100%; min-height: 46px; border: 1px solid var(--line); padding: 8px 10px;
+    background: #101827; color: #f4f5ff; font-variant-numeric: tabular-nums; }
+  .session button { min-height: 46px; padding: 6px 12px; font-size: .9rem; }
+  .log { margin-top: 20px; padding: 13px; background: #101827; border: 1px solid var(--line); border-radius: 12px; }
+  #log { list-style: none; margin: 8px 0 0; padding: 0; color: #d6e1f2; font-size: .9rem; }
+  #log li { display: flex; gap: 10px; padding: 5px 0; }
+  #log li + li { border-top: 1px solid #263248; }
+  #log .log-game { flex: 0 0 7ch; color: var(--muted); font-variant-numeric: tabular-nums; }
+</style>
+<script src="sim.js" defer></script>
 </head>
 <body>
 <main>
-  <h1>ATシミュレーター</h1>
-  <form id="settings">
-    <h2>試行条件</h2>
-    <div class="fields">
-      <label>試行回数
-        <input id="trials" type="number" min="100" max="100000" step="1" value="10000" required>
-      </label>
-      <label>シード
-        <input id="seed" type="text" inputmode="numeric" pattern="[+\-]?[0-9]+" value="20261118" required>
-      </label>
-      <label>開始差枚
-        <select id="startMode"><option value="random">ランダム分布</option><option value="fixed">固定値</option></select>
-      </label>
-      <label>開始差枚の固定値（枚）
-        <input id="startNet" type="number" step="1" min="-9007199254740991" max="9007199254740991" value="-1000" required disabled>
-      </label>
-      <label>テーブル閾値の倍率
-        <input id="threshold" type="number" min="0.5" max="2" step="any" value="1" required>
-      </label>
-      <label>強いVストック確率（%）
-        <input id="strongRate" type="number" min="0" max="100" step="any" value="10" required>
-      </label>
-      <label>特化のストック率（%）
-        <input id="stockRate" type="number" min="0" max="100" step="any" value="50" required>
-      </label>
-      <label class="toggle"><input id="acceleration" type="checkbox"> 加速を有効にする</label>
+  <header><h1>ATシミュレーター</h1></header>
+  <section class="machine" aria-label="AT操作">
+    <div class="lcd" id="lcd">
+      <div class="hud">
+        <div><span class="label">残りAT</span><strong class="number" id="remaining">100</strong> <span class="unit">G</span></div>
+        <div><span class="label">獲得差枚</span><strong class="number" id="net">0</strong> <span class="unit">枚</span></div>
+        <div><span class="label">カウンタ</span><strong class="number" id="counter"></strong><span class="detail" id="count-rule">プラス差枚加算</span></div>
+      </div>
+      <div class="lcd-bottom">
+        <div><span class="label">残りVストック</span><strong class="number" id="stocks">0</strong>
+          <span class="detail" id="stock-detail">弱 0 ／ 強 0</span></div>
+        <div><div id="mode">セット消化</div><div class="detail" id="set-info" style="text-align:right"></div></div>
+      </div>
     </div>
-    <div class="actions">
-      <button id="run" type="submit">実行</button>
-      <span id="status" role="status"></span>
+    <div class="outcome" aria-live="polite">
+      <span class="detail" id="game">0 G</span>
+      <span id="role">—</span>
+      <span class="payout">払出 <span id="payout">—</span> 枚</span>
     </div>
+    <div class="controls">
+      <button type="button" id="one">1G進む</button>
+      <button type="button" id="ten">10G進む</button>
+      <button type="button" id="until">次のCZまで進む</button>
+    </div>
+  </section>
+  <form class="session" id="session-form">
+    <label>シード<input id="seed" value="20261118" type="text" pattern="[+\-]?[0-9]+" spellcheck="false" autocomplete="off" required></label>
+    <button id="new-at">新しいATを開始</button>
   </form>
-  <div id="results" hidden>
-    <section aria-labelledby="summary-title">
-      <h2 id="summary-title">集計結果</h2>
-      <dl id="summary"></dl>
-    </section>
-    <section aria-labelledby="distribution-title">
-      <h2 id="distribution-title">獲得差枚の分布</h2>
-      <canvas id="histogram" role="img" aria-label="獲得差枚別の試行回数"></canvas>
-    </section>
-  </div>
+  <section class="log" aria-labelledby="log-title">
+    <h2 id="log-title">直近の出来事</h2>
+    <ol id="log"></ol>
+  </section>
 </main>
 <script>
-  "use strict";
-  const byId = id => document.getElementById(id);
-  const number = id => byId(id).valueAsNumber;
-  const format = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 2 });
-  const percent = new Intl.NumberFormat("ja-JP", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const form = byId("settings");
-  const canvas = byId("histogram");
-  const status = byId("status");
-  let histogram;
+  document.addEventListener("DOMContentLoaded", () => {
+    const byId = id => document.getElementById(id);
+    const modeNames = {
+      set: "セット消化", cz: "CZ", special: "特化ゾーン", freeze: "フリーズ",
+      return: "引き戻し待ち", ending: "エンディング", end: "AT終了",
+    };
+    const eventText = {
+      ending: () => "エンディング突入",
+      stock: ({ weak, strong }) => `Vストック獲得（弱 ${weak}・強 ${strong}）`,
+      pool: ({ count }) => `プール +${count}`,
+      cz: ({ fromTable }) => fromTable ? "カウンタ到達でCZ突入" : "レア役からCZ突入",
+      special: ({ frozen }) => frozen ? "フリーズ特化ゾーン突入" : "特化ゾーン突入",
+      freeze: ({ addedGames }) => `フリーズ（${addedGames}G）`,
+      addedGames: ({ games }) => `AT +${games}G`,
+      acceleration: ({ multiplier }) => `カウンタ加速 ×${multiplier}`,
+      cut: () => "有利区間切断",
+      restart: () => "新しい有利区間でAT再開",
+      returnWindow: () => "32Gの引き戻し待ちへ",
+      directEntry: () => "中段チェリーからATに直撃",
+      return: () => "プールからATに復帰",
+      stockSet: ({ rate }) => `純増${rate}枚のセット開始`,
+      end: () => "AT終了",
+    };
+    const buttons = ["one", "ten", "until"].map(byId);
+    const log = byId("log");
+    const lcd = byId("lcd");
+    const role = byId("role");
+    const count = new Intl.NumberFormat("ja-JP");
+    const signed = new Intl.NumberFormat("ja-JP", { signDisplay: "exceptZero" });
+    let session;
+    let last;
+    let busy = false;
 
-  function updateStartMode() {
-    byId("startNet").disabled = byId("startMode").value !== "fixed";
-  }
-  byId("startMode").addEventListener("change", updateStartMode);
-  updateStartMode();
-
-  function showSummary(s) {
-    const medals = value => format.format(value) + " 枚";
-    const rows = [
-      ["平均差枚", medals(s.meanNet)],
-      ["中央値", medals(s.medianNet)],
-      ["最大差枚", medals(s.maxNet)],
-      ["最小差枚", medals(s.minNet)],
-      ["エンディング到達率", percent.format(s.endingRate)],
-      ["切断発動率", percent.format(s.zoneCutRate)],
-      ["切断ストック発動率", percent.format(s.cutStockActivationRate)],
-      ["平均セット数", format.format(s.meanSets)],
-      ["テーブルCZ / セット", format.format(s.tableCzPerSet)],
-      ["レア役CZ / セット", format.format(s.rareCzPerSet)],
-      ["引き戻し率", percent.format(s.returnRate)],
-      ["フリーズ率", percent.format(s.freezeRate)],
-    ];
-    byId("summary").replaceChildren(...rows.map(([label, value]) => {
-      const pair = document.createElement("div");
-      const term = document.createElement("dt");
-      const detail = document.createElement("dd");
-      term.textContent = label;
-      detail.textContent = value;
-      pair.append(term, detail);
-      return pair;
-    }));
-  }
-
-  function buildHistogram(results, { minNet, maxNet }) {
-    const step = Math.max(1, Math.ceil((maxNet - minNet + 1) / 30));
-    const start = minNet;
-    const counts = Array(Math.floor((maxNet - start) / step) + 1).fill(0);
-    for (const result of results) counts[Math.floor((result.net - start) / step)]++;
-    return { start, step, counts };
-  }
-
-  function drawHistogram() {
-    if (!histogram || byId("results").hidden) return;
-    const { start, step, counts } = histogram;
-    const { width, height } = canvas.getBoundingClientRect();
-    if (!width || !height) return;
-    const pixelRatio = window.devicePixelRatio || 1;
-    canvas.width = Math.round(width * pixelRatio);
-    canvas.height = Math.round(height * pixelRatio);
-    const ctx = canvas.getContext("2d");
-    ctx.scale(pixelRatio, pixelRatio);
-    ctx.font = "12px system-ui";
-    const maxCount = Math.max(...counts);
-    const left = Math.max(48, ctx.measureText(format.format(maxCount)).width + 10);
-    const top = 28;
-    const bottom = height - 44;
-    const plotWidth = width - left - 12;
-    const barWidth = plotWidth / counts.length;
-
-    ctx.fillStyle = "#aebfd0";
-    ctx.fillText("試行回数", 0, 14);
-    ctx.textAlign = "right";
-    for (const tick of new Set([0, Math.floor(maxCount / 2), maxCount])) {
-      const y = bottom - tick / maxCount * (bottom - top);
-      ctx.fillStyle = "#aebfd0";
-      ctx.fillText(format.format(tick), left - 6, y + 4);
-      ctx.fillStyle = "#3c5264";
-      ctx.fillRect(left, y, plotWidth, 1);
+    // Load the six scenes before they are needed during play.
+    for (const scene of ["normal", "cz", "tokka", "freeze", "ending", "end"]) {
+      new Image().src = `img/${scene}.jpg`;
     }
 
-    ctx.fillStyle = "#69e6bb";
-    counts.forEach((count, index) => {
-      const barHeight = count / maxCount * (bottom - top);
-      ctx.fillRect(left + index * barWidth, bottom - barHeight, Math.max(1, barWidth - 1), barHeight);
-    });
-    ctx.fillStyle = "#aebfd0";
-    ctx.textAlign = "left";
-    ctx.fillText(format.format(start), left, bottom + 16);
-    ctx.textAlign = "right";
-    ctx.fillText(format.format(start + step * counts.length), width - 12, bottom + 16);
-    ctx.textAlign = "center";
-    ctx.fillText("獲得差枚（枚）", left + plotWidth / 2, height - 5);
-  }
+    function addLog(game, message) {
+      const item = document.createElement("li");
+      const time = document.createElement("span");
+      time.className = "log-game";
+      time.textContent = `${count.format(game)} G`;
+      item.append(time, message);
+      log.prepend(item);
+      if (log.children.length > 8) log.lastElementChild.remove();
+    }
 
-  new ResizeObserver(drawHistogram).observe(canvas);
-  form.addEventListener("submit", async event => {
-    event.preventDefault();
-    const button = byId("run");
-    if (button.disabled) return;
-    button.disabled = true;
-    byId("results").hidden = true;
-    const trials = number("trials");
-    try {
-      const iterator = ATSimulator.simulateTrials({
-        trials,
-        seed: BigInt(byId("seed").value),
-        startNet: byId("startMode").value === "fixed" ? number("startNet") : null,
-        parameters: {
-          thresholdMultiplier: number("threshold"),
-          strongStockRate: number("strongRate") / 100,
-          specialAddedGamesRate: (100 - number("stockRate")) / 100,
-          accelerationEnabled: byId("acceleration").checked,
-        },
-      });
-      const results = [];
-      while (results.length < trials) {
-        status.textContent = `${format.format(results.length)} / ${format.format(trials)} 試行`;
-        await new Promise(resolve => setTimeout(resolve, 0));
-        const end = performance.now() + 20;
-        do {
-          const { net, sets, cz, tableCz, endingStocks, cuts, cutStockActivations, returns, freezes } = iterator.next().value;
-          results.push({ net, sets, cz, tableCz, endingStocks, cuts, cutStockActivations, returns, freezes });
-        } while (results.length < trials && performance.now() < end);
+    function render() {
+      const state = session.state;
+      const { acceleration, stocks } = state;
+      lcd.dataset.mode = state.mode;
+      byId("mode").textContent = modeNames[state.mode];
+      byId("remaining").textContent = count.format(state.remaining);
+      byId("net").textContent = signed.format(state.net);
+      byId("counter").textContent = `${state.counter}／${state.threshold}`;
+      byId("count-rule").textContent = acceleration.remaining && !acceleration.inPrelude
+        ? `プラス差枚 ×${acceleration.multiplier}（残り${acceleration.remaining}G）` : "プラス差枚加算";
+      byId("stocks").textContent = count.format(stocks.weak + stocks.strong);
+      byId("stock-detail").textContent = `弱 ${stocks.weak} ／ 強 ${stocks.strong}`;
+      byId("set-info").textContent = `純増${state.rate}枚 · テーブル${state.table}`;
+      byId("game").textContent = `${count.format(state.game)} G`;
+      role.textContent = last?.role ?? "—";
+      role.dataset.role = last?.role ?? "";
+      byId("payout").textContent = last?.payout ?? "—";
+      for (const button of buttons) button.disabled = busy || state.done;
+      byId("new-at").disabled = busy;
+    }
+
+    async function advance(limit, untilCz = false) {
+      if (busy || session.state.done) return;
+      busy = true;
+      render();
+      try {
+        for (let i = 0; i < limit; i++) {
+          last = session.step();
+          for (const event of last.events) addLog(last.game, eventText[event.type](event));
+          if (session.state.done || (untilCz && last.events.some(event => event.type === "cz"))) break;
+          if ((i + 1) % 100 === 0) {
+            render();
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
+        }
+      } finally {
+        busy = false;
+        render();
       }
-      const summary = ATSimulator.summarize(results);
-      showSummary(summary);
-      histogram = buildHistogram(results, summary);
-      byId("results").hidden = false;
-      drawHistogram();
-      status.textContent = `${format.format(trials)} 試行完了`;
-    } catch (error) {
-      status.textContent = "実行中にエラーが発生しました。入力値を確認してください。";
-      console.error(error);
-    } finally {
-      button.disabled = false;
     }
+
+    function start() {
+      if (busy) return;
+      session = ATSimulator.createSession(byId("seed").value);
+      last = null;
+      log.replaceChildren();
+      addLog(0, "AT開始");
+      render();
+    }
+
+    byId("session-form").addEventListener("submit", event => {
+      event.preventDefault();
+      start();
+    });
+    buttons[0].addEventListener("click", () => advance(1));
+    buttons[1].addEventListener("click", () => advance(10));
+    buttons[2].addEventListener("click", () => advance(Infinity, true));
+    start();
   });
 </script>
 </body>
