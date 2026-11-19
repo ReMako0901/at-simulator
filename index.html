@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ATシミュレーター</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, sans-serif;
+      background: #111820;
+      color: #eff6fc;
+      --panel: #1a2632;
+      --border: #3c5264;
+      --muted: #aebfd0;
+      --accent: #69e6bb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 70rem; margin: auto; padding: clamp(1rem, 4vw, 3rem); }
+    h1 { font-size: clamp(1.65rem, 5vw, 2.8rem); margin: 0 0 1.4rem; }
+    h2 { font-size: 1.15rem; margin: 0 0 1rem; }
+    section, form {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: clamp(1rem, 3vw, 1.5rem);
+      margin-bottom: 1rem;
+    }
+    .fields, dl {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+      gap: 1rem;
+    }
+    label, dt, #status { color: var(--muted); }
+    label { display: grid; gap: .35rem; align-content: start; }
+    input, select, button { font: inherit; }
+    input:not([type="checkbox"]), select {
+      width: 100%;
+      min-width: 0;
+      padding: .65rem;
+      border: 1px solid var(--border);
+      border-radius: .45rem;
+      background: #111820;
+      color: inherit;
+    }
+    input:disabled { opacity: .5; }
+    .toggle, .actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+    .toggle input { accent-color: var(--accent); width: 1.1rem; height: 1.1rem; }
+    .actions { margin-top: 1.2rem; }
+    button {
+      background: var(--accent);
+      color: #10241c;
+      border: 0;
+      border-radius: .5rem;
+      padding: .65rem 1.4rem;
+      font-weight: 750;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .5; cursor: wait; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    dl { margin: 0; }
+    dl div { padding: .7rem 0; border-top: 1px solid var(--border); }
+    dt { font-size: .85rem; }
+    dd { margin: .25rem 0 0; font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    canvas { display: block; width: 100%; height: 16rem; }
+  </style>
+  <script src="./sim.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>ATシミュレーター</h1>
+  <form id="settings">
+    <h2>試行条件</h2>
+    <div class="fields">
+      <label>試行回数
+        <input id="trials" type="number" min="100" max="100000" step="1" value="10000" required>
+      </label>
+      <label>シード
+        <input id="seed" type="text" inputmode="numeric" pattern="[+\-]?[0-9]+" value="20261118" required>
+      </label>
+      <label>開始差枚
+        <select id="startMode"><option value="random">ランダム分布</option><option value="fixed">固定値</option></select>
+      </label>
+      <label>開始差枚の固定値（枚）
+        <input id="startNet" type="number" step="1" min="-9007199254740991" max="9007199254740991" value="-1000" required disabled>
+      </label>
+      <label>テーブル閾値の倍率
+        <input id="threshold" type="number" min="0.5" max="2" step="any" value="1" required>
+      </label>
+      <label>強いVストック確率（%）
+        <input id="strongRate" type="number" min="0" max="100" step="any" value="10" required>
+      </label>
+      <label>特化のストック率（%）
+        <input id="stockRate" type="number" min="0" max="100" step="any" value="50" required>
+      </label>
+      <label class="toggle"><input id="acceleration" type="checkbox"> 加速を有効にする</label>
+    </div>
+    <div class="actions">
+      <button id="run" type="submit">実行</button>
+      <span id="status" role="status"></span>
+    </div>
+  </form>
+  <div id="results" hidden>
+    <section aria-labelledby="summary-title">
+      <h2 id="summary-title">集計結果</h2>
+      <dl id="summary"></dl>
+    </section>
+    <section aria-labelledby="distribution-title">
+      <h2 id="distribution-title">獲得差枚の分布</h2>
+      <canvas id="histogram" role="img" aria-label="獲得差枚別の試行回数"></canvas>
+    </section>
+  </div>
+</main>
+<script>
+  "use strict";
+  const byId = id => document.getElementById(id);
+  const number = id => byId(id).valueAsNumber;
+  const format = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 2 });
+  const percent = new Intl.NumberFormat("ja-JP", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const form = byId("settings");
+  const canvas = byId("histogram");
+  const status = byId("status");
+  let histogram;
+
+  function updateStartMode() {
+    byId("startNet").disabled = byId("startMode").value !== "fixed";
+  }
+  byId("startMode").addEventListener("change", updateStartMode);
+  updateStartMode();
+
+  function showSummary(s) {
+    const medals = value => format.format(value) + " 枚";
+    const rows = [
+      ["平均差枚", medals(s.meanNet)],
+      ["中央値", medals(s.medianNet)],
+      ["最大差枚", medals(s.maxNet)],
+      ["最小差枚", medals(s.minNet)],
+      ["エンディング到達率", percent.format(s.endingRate)],
+      ["切断発動率", percent.format(s.zoneCutRate)],
+      ["切断ストック発動率", percent.format(s.cutStockActivationRate)],
+      ["平均セット数", format.format(s.meanSets)],
+      ["テーブルCZ / セット", format.format(s.tableCzPerSet)],
+      ["レア役CZ / セット", format.format(s.rareCzPerSet)],
+      ["引き戻し率", percent.format(s.returnRate)],
+      ["フリーズ率", percent.format(s.freezeRate)],
+    ];
+    byId("summary").replaceChildren(...rows.map(([label, value]) => {
+      const pair = document.createElement("div");
+      const term = document.createElement("dt");
+      const detail = document.createElement("dd");
+      term.textContent = label;
+      detail.textContent = value;
+      pair.append(term, detail);
+      return pair;
+    }));
+  }
+
+  function buildHistogram(results, { minNet, maxNet }) {
+    const step = Math.max(1, Math.ceil((maxNet - minNet + 1) / 30));
+    const start = minNet;
+    const counts = Array(Math.floor((maxNet - start) / step) + 1).fill(0);
+    for (const result of results) counts[Math.floor((result.net - start) / step)]++;
+    return { start, step, counts };
+  }
+
+  function drawHistogram() {
+    if (!histogram || byId("results").hidden) return;
+    const { start, step, counts } = histogram;
+    const { width, height } = canvas.getBoundingClientRect();
+    if (!width || !height) return;
+    const pixelRatio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * pixelRatio);
+    canvas.height = Math.round(height * pixelRatio);
+    const ctx = canvas.getContext("2d");
+    ctx.scale(pixelRatio, pixelRatio);
+    ctx.font = "12px system-ui";
+    const maxCount = Math.max(...counts);
+    const left = Math.max(48, ctx.measureText(format.format(maxCount)).width + 10);
+    const top = 28;
+    const bottom = height - 44;
+    const plotWidth = width - left - 12;
+    const barWidth = plotWidth / counts.length;
+
+    ctx.fillStyle = "#aebfd0";
+    ctx.fillText("試行回数", 0, 14);
+    ctx.textAlign = "right";
+    for (const tick of new Set([0, Math.floor(maxCount / 2), maxCount])) {
+      const y = bottom - tick / maxCount * (bottom - top);
+      ctx.fillStyle = "#aebfd0";
+      ctx.fillText(format.format(tick), left - 6, y + 4);
+      ctx.fillStyle = "#3c5264";
+      ctx.fillRect(left, y, plotWidth, 1);
+    }
+
+    ctx.fillStyle = "#69e6bb";
+    counts.forEach((count, index) => {
+      const barHeight = count / maxCount * (bottom - top);
+      ctx.fillRect(left + index * barWidth, bottom - barHeight, Math.max(1, barWidth - 1), barHeight);
+    });
+    ctx.fillStyle = "#aebfd0";
+    ctx.textAlign = "left";
+    ctx.fillText(format.format(start), left, bottom + 16);
+    ctx.textAlign = "right";
+    ctx.fillText(format.format(start + step * counts.length), width - 12, bottom + 16);
+    ctx.textAlign = "center";
+    ctx.fillText("獲得差枚（枚）", left + plotWidth / 2, height - 5);
+  }
+
+  new ResizeObserver(drawHistogram).observe(canvas);
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const button = byId("run");
+    if (button.disabled) return;
+    button.disabled = true;
+    byId("results").hidden = true;
+    const trials = number("trials");
+    try {
+      const iterator = ATSimulator.simulateTrials({
+        trials,
+        seed: BigInt(byId("seed").value),
+        startNet: byId("startMode").value === "fixed" ? number("startNet") : null,
+        parameters: {
+          thresholdMultiplier: number("threshold"),
+          strongStockRate: number("strongRate") / 100,
+          specialAddedGamesRate: (100 - number("stockRate")) / 100,
+          accelerationEnabled: byId("acceleration").checked,
+        },
+      });
+      const results = [];
+      while (results.length < trials) {
+        status.textContent = `${format.format(results.length)} / ${format.format(trials)} 試行`;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const end = performance.now() + 20;
+        do {
+          const { net, sets, cz, tableCz, endingStocks, cuts, cutStockActivations, returns, freezes } = iterator.next().value;
+          results.push({ net, sets, cz, tableCz, endingStocks, cuts, cutStockActivations, returns, freezes });
+        } while (results.length < trials && performance.now() < end);
+      }
+      const summary = ATSimulator.summarize(results);
+      showSummary(summary);
+      histogram = buildHistogram(results, summary);
+      byId("results").hidden = false;
+      drawHistogram();
+      status.textContent = `${format.format(trials)} 試行完了`;
+    } catch (error) {
+      status.textContent = "実行中にエラーが発生しました。入力値を確認してください。";
+      console.error(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
