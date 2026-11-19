@@ -221,6 +221,7 @@
 
     byId("session-form").addEventListener("submit", event => {
       event.preventDefault();
+      byId("seed").value = String(Math.floor(Math.random() * 900000000) + 100000000);
       start();
     });
     const tap = (button, action) => button.addEventListener("pointerdown", event => {
